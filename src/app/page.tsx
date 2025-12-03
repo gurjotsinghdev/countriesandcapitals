@@ -1,7 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import countriesLib from "world-countries-capitals";
+
+export const dynamic = "force-dynamic";
 
 type CountryDetail = {
   country: string;
@@ -116,7 +118,7 @@ const buildGeoQuestion = (country: Country): GeoQuestion => {
 const buildPool = () => shuffle(buildCountries()).slice(0, TOTAL_LEVELS);
 
 export default function Home() {
-  const [countries, setCountries] = useState<Country[]>(buildPool);
+  const [countries, setCountries] = useState<Country[]>([]);
   const [levelIndex, setLevelIndex] = useState(0);
   const [step, setStep] = useState<"country" | "capital" | "geo">("country");
   const [answer, setAnswer] = useState("");
@@ -126,6 +128,10 @@ export default function Home() {
   const [streak, setStreak] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [showHint, setShowHint] = useState(false);
+
+  useEffect(() => {
+    setCountries(buildPool());
+  }, []);
 
   const totalLevels = Math.min(TOTAL_LEVELS, countries.length);
   const currentCountry =
@@ -278,7 +284,9 @@ export default function Home() {
                   </p>
                 </div>
               ) : (
-                <div className="text-center text-black/60">Loading level…</div>
+                <div className="text-center text-black/60">
+                  Loading level order…
+                </div>
               )}
             </div>
             <div className="grid gap-3 border-t border-black/10 px-5 py-4 sm:grid-cols-3">
