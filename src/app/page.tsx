@@ -1,13 +1,6 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { feature } from "topojson-client";
-import type { Feature, Geometry, GeometryCollection } from "geojson";
-import type { GlobeInstance } from "globe.gl";
-import type { Topology } from "topojson-specification";
-import { MeshPhongMaterial } from "three";
-import worldTopo from "@/data/countries-110m.json";
+import { useMemo, useState } from "react";
 import countriesLib from "world-countries-capitals";
 
 type CountryDetail = {
@@ -29,8 +22,6 @@ type Country = {
   isLandlocked: boolean;
   driveDirection: "left" | "right";
   famousFor?: string;
-  centroid: { lat: number; lng: number };
-  geometry: Geometry;
 };
 
 type GeoQuestion = {
@@ -38,17 +29,6 @@ type GeoQuestion = {
   answer: string;
   options: string[];
 };
-
-type GlobeCountry = Country & {
-  type: "Feature";
-  properties: { name: string };
-};
-
-type LabelPoint = { lat: number; lng: number; name: string };
-type MarkerPoint = { lat: number; lng: number };
-type WorldAtlasTopology = Topology<{ countries: GeometryCollection }>;
-
-const Globe = dynamic(() => import("react-globe.gl"), { ssr: false });
 
 const CONTINENT_NAMES: Record<string, string> = {
   af: "Africa",
@@ -88,32 +68,6 @@ const shuffle = <T,>(array: T[]) => {
   return result;
 };
 
-const collectCoords = (geometry: Geometry): [number, number][] => {
-  if (geometry.type === "Polygon") {
-    return geometry.coordinates.flat() as [number, number][];
-  }
-  if (geometry.type === "MultiPolygon") {
-    return geometry.coordinates.flat(2) as [number, number][];
-  }
-  return [];
-};
-
-const computeCentroid = (geometry: Geometry) => {
-  const coords = collectCoords(geometry);
-  if (!coords.length) return { lat: 0, lng: 0 };
-  const totals = coords.reduce(
-    (acc, [lng, lat]) => ({
-      lat: acc.lat + lat,
-      lng: acc.lng + lng,
-    }),
-    { lat: 0, lng: 0 },
-  );
-  return {
-    lat: totals.lat / coords.length,
-    lng: totals.lng / coords.length,
-  };
-};
-
 const buildCountries = (): Country[] => {
   const detailList = countriesLib.getAllCountryDetails() as CountryDetail[];
   const detailByIso = new Map<string, CountryDetail>();
@@ -125,20 +79,11 @@ const buildCountries = (): Country[] => {
     detailByIso.set(numericTrimmed, detail);
   });
 
-  const topology = worldTopo as WorldAtlasTopology;
-  const rawFeatures = feature(
-    topology,
-    topology.objects.countries,
-  ).features as Feature<Geometry, { name: string }>[];
-
-  return rawFeatures
-    .map((f) => {
-      const id = String(f.id);
-      const detail =
-        detailByIso.get(id) || detailByIso.get(id.padStart(3, "0"));
-      if (!detail) return null;
+  return detailList
+    .map((detail) => {
+      if (!detail?.iso?.numeric) return null;
       return {
-        id: String(f.id),
+        id: String(parseInt(detail.iso.numeric, 10)),
         name: titleize(detail.country),
         capital: titleize(detail.capital),
         continent: CONTINENT_NAMES[detail.continent] ?? "Unknown",
@@ -146,8 +91,6 @@ const buildCountries = (): Country[] => {
         isLandlocked: Boolean(detail.is_landlocked),
         driveDirection: detail.drive_direction === "left" ? "left" : "right",
         famousFor: detail.famous_for,
-        centroid: computeCentroid(f.geometry),
-        geometry: f.geometry,
       };
     })
     .filter(Boolean) as Country[];
@@ -159,11 +102,6 @@ const buildGeoQuestion = (country: Country): GeoQuestion => {
       prompt: `Is ${country.name} landlocked?`,
       answer: country.isLandlocked ? "Yes" : "No",
       options: shuffle(["Yes", "No"]),
-    },
-    {
-      prompt: `Which hemisphere is ${country.name} mostly in?`,
-      answer: country.centroid.lat >= 0 ? "Northern" : "Southern",
-      options: shuffle(["Northern", "Southern"]),
     },
     {
       prompt: `Which driving side is used in ${country.name}?`,
@@ -194,49 +132,10 @@ export default function Home() {
     levelIndex < countries.length ? countries[levelIndex] : undefined;
   const finished = totalLevels > 0 && levelIndex >= totalLevels;
 
-  const globeRef = useRef<GlobeInstance | null>(null);
-
   const geoQuestion = useMemo(
     () => (currentCountry ? buildGeoQuestion(currentCountry) : null),
     [currentCountry],
   );
-
-  const polygonData = useMemo<GlobeCountry[]>(
-    () =>
-      countries.map((c) => ({
-        ...c,
-        type: "Feature",
-        properties: { name: c.name },
-      })),
-    [countries],
-  );
-
-  const globeMaterial = useMemo(
-    () => new MeshPhongMaterial({ color: 0xf8f8f8, emissive: 0x111111 }),
-    [],
-  );
-
-  const markerData = useMemo<MarkerPoint[]>(
-    () =>
-      currentCountry
-        ? [
-            {
-              lat: currentCountry.centroid.lat,
-              lng: currentCountry.centroid.lng,
-            },
-          ]
-        : [],
-    [currentCountry],
-  );
-
-  useEffect(() => {
-    if (currentCountry && globeRef.current) {
-      globeRef.current.pointOfView(
-        { lat: currentCountry.centroid.lat, lng: currentCountry.centroid.lng, altitude: 1.8 },
-        900,
-      );
-    }
-  }, [currentCountry]);
 
   const handleCorrect = (nextStep?: "capital" | "geo" | "country") => {
     setCorrectCount((prev) => prev + 1);
@@ -277,7 +176,7 @@ export default function Home() {
       if (normalizeAnswer(currentCountry.name) === cleaned) {
         handleCorrect("capital");
       } else {
-        setFeedback("Not quite. Scan the globe and try again.");
+        setFeedback("Not quite. Use the hints and try again.");
         setStreak(0);
       }
       return;
@@ -327,11 +226,6 @@ export default function Home() {
       if (geoQuestion.prompt.includes("landlocked")) {
         return currentCountry.isLandlocked ? "No coastline." : "Touches the sea.";
       }
-      if (geoQuestion.prompt.includes("hemisphere")) {
-        return currentCountry.centroid.lat >= 0
-          ? "Above the equator."
-          : "Below the equator.";
-      }
       if (geoQuestion.prompt.includes("driving side")) {
         return `They drive on the ${currentCountry.driveDirection} side.`;
       }
@@ -366,51 +260,25 @@ export default function Home() {
 
         <section className="grid gap-6 lg:grid-cols-[7fr_3fr]">
           <div className="relative overflow-hidden rounded-2xl border border-black/10 bg-white">
-            <div className="relative flex h-[520px] items-center justify-center">
+            <div className="relative flex h-[280px] items-center justify-center p-6 text-center sm:h-[340px]">
               {currentCountry ? (
-                <Globe
-                  ref={globeRef}
-                  height={520}
-                  width={undefined}
-                  backgroundColor="#fff"
-                  globeImageUrl={null}
-                  bumpImageUrl={null}
-                  backgroundImageUrl={null}
-                  globeMaterial={globeMaterial}
-                  showAtmosphere={false}
-                  polygonsData={polygonData}
-                  polygonCapColor={(polygon: GlobeCountry) =>
-                    polygon.id === currentCountry.id
-                      ? "rgba(0,0,0,0.45)"
-                      : "rgba(0,0,0,0.05)"
-                  }
-                  polygonSideColor={() => "rgba(0,0,0,0.1)"}
-                  polygonStrokeColor={(polygon: GlobeCountry) =>
-                    polygon.id === currentCountry.id ? "rgba(200,0,0,0.9)" : "rgba(0,0,0,0.15)"
-                  }
-                  polygonAltitude={(polygon: GlobeCountry) =>
-                    polygon.id === currentCountry.id ? 0.08 : 0.01
-                  }
-                  polygonLabel={() => ""}
-                  polygonsTransitionDuration={300}
-                  labelsData={[]}
-                  labelLat={(d: LabelPoint) => d.lat}
-                  labelLng={(d: LabelPoint) => d.lng}
-                  labelText={() => ""}
-                  labelSize={() => 1.2}
-                  labelColor={() => "#000"}
-                  labelDotRadius={() => 0.9}
-                  arcsData={[]}
-                  pointsData={markerData}
-                  pointLat={(d: MarkerPoint) => d.lat}
-                  pointLng={(d: MarkerPoint) => d.lng}
-                  pointColor={() => "#c00000"}
-                  pointAltitude={() => 0.12}
-                  pointRadius={() => 0.8}
-                  lineHoverPrecision={0}
-                />
+                <div className="space-y-3">
+                  <p className="text-xs uppercase tracking-[0.2em] text-black/50">
+                    Country spotlight
+                  </p>
+                  <p className="text-4xl font-semibold sm:text-5xl">
+                    Level {Math.min(levelIndex + 1, totalLevels)}
+                  </p>
+                  <p className="max-w-xl text-sm text-black/70">
+                    Globe view is disabled for stability. Use the hints and prompts to clear each
+                    level.
+                  </p>
+                  <p className="text-sm font-medium text-black/80">
+                    Continent: {currentCountry.continent}
+                  </p>
+                </div>
               ) : (
-                <div className="text-center text-black/60">Loading globe data…</div>
+                <div className="text-center text-black/60">Loading level…</div>
               )}
             </div>
             <div className="grid gap-3 border-t border-black/10 px-5 py-4 sm:grid-cols-3">
@@ -457,7 +325,7 @@ export default function Home() {
                   <form onSubmit={handleSubmit} className="space-y-3">
                     <p className="text-sm text-black/80">
                       {step === "country" &&
-                        "Name the highlighted country on the globe."}
+                        "Guess the country using the clues above and the hint."}
                       {step === "capital" &&
                         `Type the capital city of ${currentCountry?.name}.`}
                     </p>
